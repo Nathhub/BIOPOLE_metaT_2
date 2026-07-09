@@ -1,0 +1,72 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "",
+    "text": "This report summarises the bioinformatics workflow applied to the Chukchi Sea eRNA samples to explore the metabolic pathways active and highly expressed, invovled in biogeochemical cycles."
+  },
+  {
+    "objectID": "index.html#sample-processing-sequencing-data-availability",
+    "href": "index.html#sample-processing-sequencing-data-availability",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "🧪 Sample Processing, Sequencing & Data Availability",
+    "text": "🧪 Sample Processing, Sequencing & Data Availability\nThe Centre for Genomic Research (CGR) processed 9 marine eRNA samples (+ 1 negative control) for metatranscriptomic sequencing as part of project SSP203072. The workflow included:\n\nDNase treatment of all extracted RNA samples.\nrRNA depletion using the Seawater riboPOOL kit.\nConstruction of Illumina RNA-seq libraries from the rRNA-depleted material.\n\nMultiplexing of all libraries and sequencing on one lane of an Illumina NovaSeq X Plus (NovaSeq X+) 25B flow cell.\nThis setup is expected to produce approximately ~325 million read pairs per sample, providing deep metatranscriptomic coverage suitable for resolving nitrogen-cycling pathways, including denitrification and anammox.\nFunding & administrative details:\n\nSSP ID: SSP203072\nPlatform: Illumina NovaSeq X+\nFunding: NEOF1819 — Purchase Order P11212-200\n\nAll files—including raw data, processing details, and download instructions—are available via:\nProject data download"
+  },
+  {
+    "objectID": "index.html#sequencing-output-cgr-qc-summary",
+    "href": "index.html#sequencing-output-cgr-qc-summary",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "📊 Sequencing Output & CGR QC Summary",
+    "text": "📊 Sequencing Output & CGR QC Summary\n\n\n\n\n\n\n\n\n\n\nName\nRaw Reads (M)\nTrimmed Reads (M)\nRaw Bases (M)\nTrimmed Bases (M)\n\n\n\n\n1-S4S\n422.03\n418.30\n126,608.75\n120,507.35\n\n\n2-S4M\n559.84\n557.67\n167,952.06\n163,451.31\n\n\n3-S4B\n613.03\n611.42\n183,908.71\n179,372.50\n\n\n4-S13S\n9.89\n7.81\n2,968.42\n2,244.11\n\n\n5-S13M\n240.41\n238.67\n72,124.26\n70,520.45\n\n\n6-S13B\n617.78\n615.94\n185,334.01\n181,063.09\n\n\n7-S14S\n526.76\n524.35\n158,026.71\n153,976.49\n\n\n8-S14M\n526.33\n524.19\n157,899.00\n153,074.61\n\n\n9-S14B\n571.17\n569.59\n171,349.89\n166,325.31\n\n\n10-negative_control\n5.92\n5.16\n1,776.58\n1,487.48\n\n\n\nDescription of Methods The raw FASTQ files are trimmed for the presence of Illumina adapter sequences using Cutadapt version 4.5 . The option -O 3 was used, meaning that trimming occurred in reads where at least 3bp of adapter sequence was observed at the 3’ end of the read. The reads were further trimmed to remove low quality bases with a minimum window quality score of 20. After trimming, reads shorter than 15 bp were removed. Only read pairs are retained, therefore if a read of a pair is trimmed away then the other read in the pair is also discarded.\n\n\n\n\n\n\nNote📝 Notes on Low-Yield Samples\n\n\n\n4-S13S returned an exceptionally low number of reads because very little RNA was recovered from the corresponding Sterivex filters. This limited input material resulted in poor library complexity and low overall sequencing yield.\n10-negative_control is a processing negative control sample and therefore contains no biological RNA. The very low read count is expected and confirms that minimal contamination occurred during library preparation."
+  },
+  {
+    "objectID": "index.html#rrna-removal-sortmerna",
+    "href": "index.html#rrna-removal-sortmerna",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "rRNA Removal – SortMeRNA",
+    "text": "rRNA Removal – SortMeRNA\nTo enrich for mRNA and other non-rRNA transcripts, we removed ribosomal RNA using SortMeRNA.\nThe command below shows the SortMeRNA run that was used for each sample. We used the CGR-trimmed paired-end reads as input and the smr_v4.3_sensitive_db_rfam_seeds database for rRNA identification.\nsortmerna \\\n  --ref \"smr_v4.3_sensitive_db_rfam_seeds.fasta\" \\\n  --reads \"$R1\" \\\n  --reads \"$R2\" \\\n  --threads \"$SLURM_CPUS_PER_TASK\" \\\n  --fastx \\\n  --out2 \\\n  --paired_in \\\n  --aligned \"${SAMPLE}_rRNA\" \\\n  --other \"${SAMPLE}_RNA_clean\" \\\n  --workdir \"$WORKDIR\"\nFor each sample, SortMeRNA produces:\nrRNA files containing reads classified as rRNA\nRNA_clean files containing the rRNA-depleted read pairs, which are carried forward to assembly."
+  },
+  {
+    "objectID": "index.html#de-novo-assembly-megahit",
+    "href": "index.html#de-novo-assembly-megahit",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "De Novo Assembly – MEGAHIT",
+    "text": "De Novo Assembly – MEGAHIT\nWe performed a co-assembly of selected rRNA-depleted samples using MEGAHIT, optimised for complex metatranscriptomic data with the meta-sensitive preset. For illustration, the command below shows the co-assembly of samples:\nmegahit \n-1 [station_samples]_RNA_clean_fwd.fq.gz \n-2 [station_samples]_RNA_clean_rev.fq.gz \n-t 60 \n--presets meta-sensitive \n--min-contig-len 500 \n-m 0.9 \n-o St[1:3]_megahit_out\nAssembly statistics for an example MEGAHIT run (St1) were obtained using seqkit:\nseqkit stats final.contigs.fa\nFor example (St1 assembly):\n\n\n\n\n\n\n\n\n\n\n\nAssembly\n# Contigs\nTotal Length (bp)\nMin Length (bp)\nMean Length (bp)\nMax Length (bp)\n\n\n\n\nfinal.contigs.fa\n1,432,902\n1,457,453,119\n500\n1,017.1\n106,426\n\n\n\nThese statistics indicate a highly fragmented but deep assembly, typical of complex marine microbial metatranscriptomes, with contigs ≥500 bp retained for downstream analyses."
+  },
+  {
+    "objectID": "index.html#read-mapping-bowtie2-and-samtools",
+    "href": "index.html#read-mapping-bowtie2-and-samtools",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "Read Mapping – Bowtie2 and Samtools",
+    "text": "Read Mapping – Bowtie2 and Samtools\nTo quantify transcript coverage across assembled contigs, we mapped the rRNA-depleted reads back to the MEGAHIT assembly using Bowtie2, followed by BAM processing with Samtools.\nFirst, we built a Bowtie2 index from the fixed assembly:\nbowtie2-build St1_assembly-fixed.fa St1_assembly-fixed\nThen, for each sample, paired-end reads were aligned and processed as follows:\nIDX=\"St1_assembly-fixed\"\nR1=\"SAMPLE_RNA_clean_fwd.fq.gz\"\nR2=\"SAMPLE_RNA_clean_rev.fq.gz\"\nTHREADS=16\nOUT=\"St1_SAMPLE\"\n\nMap paired-end reads\n\nbowtie2 -x \"${IDX}\"\n-1 \"${R1}\"\n-2 \"${R2}\"\n-p \"${THREADS}\"\n-S \"${OUT}.sam\"\n\nConvert to BAM, keep mapped reads only (-F 4), sort and index\n\nsamtools view -F 4 -bS \"${OUT}.sam\" -o \"${OUT}-RAW.bam\"\nsamtools sort -@ \"${THREADS}\" \"${OUT}-RAW.bam\" -o \"${OUT}.bam\"\nsamtools index \"${OUT}.bam\"\nThe resulting sorted and indexed BAM files (.bam, .bam.bai) are used as input for downstream coverage estimation and gene- or contig-level quantification in anvi’o."
+  },
+  {
+    "objectID": "index.html#creating-anvio-databases",
+    "href": "index.html#creating-anvio-databases",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "Creating anvi’o Databases",
+    "text": "Creating anvi’o Databases\nSubsequent steps involved importing the assemblies and mapped reads into anvi’o to facilitate contig profiling, annotation, and interactive exploration of nitrogen-cycle genes (e.g. denitrification and anammox pathways).\nIn brief, the workflow included:\n\nCreating a contigs database from the MEGAHIT assembly\nRunning HMMs and functional annotation (e.g. PFAM, TIGRFAMs, KOfam)\nProfiling BAM files for each sample to obtain coverage and detection statistics\nMerging profiles across samples for joint inspection and downstream analyses\n\nExample (commands will vary slightly depending on environment and anvio version):\n\nCreate contigs database\n\nanvi-gen-contigs-database -f St1_assembly-fixed.fa -o St1_contigs.db -n \"St1 Chukchi Sea metaT\"\n\nRun HMMs (standard anvio collection)\n\nanvi-run-hmms -c St1_contigs.db --num-threads 20\n\nProfile each BAM file\n\nanvi-profile -i St1_SAMPLE.bam -c St1_contigs.db\n--output-dir St1_SAMPLE_profile\n--num-threads 20\n\nMerge profiles across samples\n\nanvi-merge St1_*_profile/PROFILE.db -o St1_merged_profiles -c St1_contigs.db\nThese anvi’o databases form the basis for functional annotation and visualisation of key nitrogen-cycle pathways in the Chukchi Sea metatranscriptomes."
+  },
+  {
+    "objectID": "index.html#functional-annotation-of-genes",
+    "href": "index.html#functional-annotation-of-genes",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "🔍 Functional Annotation of genes",
+    "text": "🔍 Functional Annotation of genes\nTo characterise the metabolic potential represented in the metatranscriptomic assembly, we performed extensive functional annotation of the anvi’o contigs database. This step links assembled sequences to known protein families, orthologous groups, and taxonomic markers, enabling downstream interpretation of nitrogen-cycle genes (e.g., denitrification, anammox).\nWe used the following anvi’o annotation programs:\nanvi-run-hmms\nIdentifies single-copy core genes (SCGs) and key conserved protein families using anvi’o’s curated HMM collections. This provides quality metrics for assemblies and forms the basis for taxonomic inference.\nanvi-run-ncbi-cogs\nAssigns Clusters of Orthologous Groups (COGs) from NCBI to contigs based on predicted open reading frames. COG categories help identify broad functional roles such as energy production, amino acid metabolism, stress response, etc.\nanvi-run-kegg-kofams\nAnnotates genes using KEGG Orthologs (KOfam HMMs), providing pathway-level information including nitrogen cycling modules (e.g., nitrate reduction, nitrification, denitrification, anammox).\nanvi-run-scg-taxonomy\nUses single-copy core gene content to infer taxonomic origin of contigs, giving insight into which microbial groups are contributing to specific nitrogen-cycling pathways."
+  },
+  {
+    "objectID": "index.html#metabolic-reconstruction-and-pathway-visualisation",
+    "href": "index.html#metabolic-reconstruction-and-pathway-visualisation",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "🔬 Metabolic Reconstruction and Pathway Visualisation",
+    "text": "🔬 Metabolic Reconstruction and Pathway Visualisation\nFollowing functional annotation, we performed metabolic inference and pathway-level analysis using anvi’o’s metabolism suite. These tools integrate KEGG Ortholog (KOfam) annotations with curated pathway models to identify which biochemical pathways are represented in the dataset and to visualise how transcripts map onto specific metabolic processes—particularly those involved in nitrogen cycling.\nWe used the following anvi’o programs:\nanvi-estimate-metabolism\nIdentifies complete and partial KEGG modules across all annotated contigs, providing an overview of metabolic potential (e.g., denitrification, dissimilatory nitrate reduction, anammox).\nanvi-reaction-network\nGenerates reaction-centric metabolic networks based on KEGG reactions detected in the assembly. This allows exploration of how individual reactions connect into broader nitrogen pathways.\nanvi-draw-kegg\nRenders KEGG metabolic pathway diagrams annotated with detected genes, enabling visual inspection of pathway completeness and highlighting which steps are supported by metatranscriptomic evidence.\nThese tools collectively provide a pathway-level view of nitrogen cycling activity in the Chukchi Sea microbial community, enabling detailed interpretation of expression patterns associated with denitrification, nitrification, and anammox processes."
+  },
+  {
+    "objectID": "index.html#exploring-all-transcripts",
+    "href": "index.html#exploring-all-transcripts",
+    "title": "BIOPOLE - Chukchi Sea metatranscriptomics analysis report - Manuscript 2",
+    "section": "Exploring all transcripts",
+    "text": "Exploring all transcripts\n\nStation 1\nSt1_megahit_out]$ anvi-export-gene-coverage-and-detection -c St1_contigs.db -p St1_MERGED/PROFILE.db -O St1_gene_expression"
+  }
+]

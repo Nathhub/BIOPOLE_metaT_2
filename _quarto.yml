@@ -1,0 +1,9 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "BIOPOLE Report"
+  navbar: false
+execute:
+  freeze: false
