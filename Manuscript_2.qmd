@@ -258,13 +258,121 @@ These tools collectively provide a pathway-level view of nitrogen cycling activi
 
 ## Exploring all transcripts
 
-### Station 1
-
 ```bash
-anvi-export-gene-coverage-and-detection -c St1_contigs.db -p St1_MERGED/PROFILE.db -O St1_gene_expression
+anvi-export-gene-coverage-and-detection -c St1_contigs.db
+                                        -p St1_MERGED/PROFILE.db 
+                                        -O St1_gene_expression
+```
+We replicate this for the other stations. Then we can import the tables to R.
+
+```{r importing data}
+library(tidyverse)
+
+st1 <- read_tsv("data/St1_gene_coverage_annotations.tsv") %>%
+  mutate(assembly = "St1")
+
+st2 <- read_tsv("data/St2_gene_coverage_annotations.tsv") %>%
+  mutate(assembly = "St2")
+
+st3 <- read_tsv("data/St3_gene_coverage_annotations.tsv") %>%
+  mutate(assembly = "St3")
+
+genes_all <- bind_rows(st1, st2, st3)
+
+### Making a tidy table
+
+genes_long <- genes_all %>%
+  pivot_longer(
+    cols = matches("^St[123]_.*[BMS]$"),
+    names_to = "sample",
+    values_to = "coverage",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(
+    station = str_extract(sample, "^St\\d+"),
+    depth_code = str_extract(sample, "[BMS]$"),
+    depth = recode(
+      depth_code,
+      S = "Surface",
+      M = "Mid",
+      B = "Bottom"
+    ),
+    KO_ID = na_if(KO_ID, "NA"),
+    KO_function = na_if(KO_function, "NA"),
+    COG_ID = na_if(COG_ID, "NA"),
+    COG_Function = na_if(COG_Function, "NA")
+  )
+
+# create a globally unique gene identifier
+genes_long <- genes_long %>%
+  mutate(
+    gene_id = paste(assembly, gene_callers_id, sep = "_")
+  )
+
+# Aggregate by KO
+
+ko_long <- genes_long %>%
+  filter(!is.na(KO_ID)) %>%
+  group_by(
+    sample,
+    station,
+    depth,
+    KO_ID,
+    KO_function
+  ) %>%
+  summarise(
+    coverage = sum(coverage, na.rm = TRUE),
+    n_genes = n_distinct(gene_id),
+    .groups = "drop"
+  )
+
+# Create a wide KO matrix
+
+ko_matrix <- ko_long %>%
+  select(KO_ID, KO_function, sample, coverage) %>%
+  pivot_wider(
+    names_from = sample,
+    values_from = coverage,
+    values_fill = 0
+  )
+
+# splitting genes with multiple KOs before aggregating
+
+genes_long_ko <- genes_long %>%
+  filter(!is.na(KO_ID)) %>%
+  separate_longer_delim(
+    cols = c(KO_ID, KO_function),
+    delim = ";"
+  ) %>%
+  mutate(
+    KO_ID = str_trim(KO_ID),
+    KO_function = str_trim(KO_function)
+  ) %>%
+  filter(KO_ID != "")
+
+# aggregation
+
+ko_long <- genes_long_ko %>%
+  group_by(
+    sample,
+    station,
+    depth,
+    KO_ID,
+    KO_function
+  ) %>%
+  summarise(
+    coverage = sum(coverage, na.rm = TRUE),
+    n_genes = n_distinct(gene_id),
+    .groups = "drop"
+  )
+
 ```
 
+```{r}
+library(ggplot2)
 
-```bash
-
+ggplot(ko_long, aes(coverage)) +
+  geom_histogram(bins = 100) +
+  scale_x_log10() +
+  theme_bw()
 ```
