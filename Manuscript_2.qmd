@@ -368,11 +368,260 @@ ko_long <- genes_long_ko %>%
 
 ```
 
-```{r}
-library(ggplot2)
+```{r plot coverage distribution}
 
 ggplot(ko_long, aes(coverage)) +
   geom_histogram(bins = 100) +
   scale_x_log10() +
   theme_bw()
+```
+
+We can see that there are some KOs with extremely low coverage (<0.1). It's probably good to filter them out...
+
+First, let's do a simple normalisation and compute relative abundance within each sample
+
+```{r}
+ko_long <- ko_long %>%
+   group_by(sample) %>%
+   mutate(
+     rel_abundance = coverage / sum(coverage),
+     rel_percent = 100 * rel_abundance
+   ) %>%
+   ungroup()
+```
+
+```{r}
+## ============================================================
+## Chukchi Sea metatranscriptomics — downstream gene expression
+## exploration and nitrogen-cycle pathway analysis
+##
+## Uses the existing `ko_long` tibble as-is:
+##   sample, station, depth, KO_ID, KO_function,
+##   coverage, n_genes, rel_abundance, rel_percent
+## Normalisation is already done (rel_abundance / rel_percent),
+## and low-confidence samples (S13S, negative control) are
+## already excluded — 8 samples remain.
+## ============================================================
+
+library(vegan)       # ordination
+library(pheatmap)    # heatmap plotting
+library(RColorBrewer)
+
+## ------------------------------------------------------------
+## 1. Sample metadata (one row per sample) — pulled straight
+##    out of ko_long rather than re-derived
+## ------------------------------------------------------------
+
+sample_meta <- ko_long %>%
+  distinct(sample, station, depth)
+
+## ------------------------------------------------------------
+## 2. Wide sample x KO matrix for ordination / clustering
+##    Using rel_abundance as it's already normalised for both
+##    library size and total coverage — the right basis for
+##    comparing community-wide functional profiles.
+## ------------------------------------------------------------
+
+ko_matrix_rel <- ko_long %>%
+  select(KO_ID, KO_function, sample, rel_abundance) %>%
+  pivot_wider(
+    names_from  = sample,
+    values_from = rel_abundance,
+    values_fill = 0
+  )
+
+mat <- ko_matrix_rel %>%
+  select(-KO_ID, -KO_function) %>%
+  as.matrix() %>%
+  t()
+colnames(mat) <- ko_matrix_rel$KO_ID
+# rows = samples, columns = KOs, values = rel_abundance
+
+## ------------------------------------------------------------
+## 3. Whole-community ordination (NMDS, Bray-Curtis)
+##    — check whether station and/or depth structure the
+##    overall functional profile before zooming into N-cycling
+## ------------------------------------------------------------
+
+mat_hell <- decostand(mat, method = "hellinger")
+
+set.seed(1)
+nmds <- metaMDS(mat_hell, distance = "bray", k = 2, trymax = 100)
+
+nmds_scores <- as_tibble(scores(nmds, display = "sites"), rownames = "sample") %>%
+  left_join(sample_meta, by = "sample")
+
+ggplot(nmds_scores, aes(NMDS1, NMDS2, color = station, shape = depth)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = sample), vjust = -1, size = 3, show.legend = FALSE) +
+  theme_minimal(base_size = 13) +
+  labs(title = "NMDS of KO functional profiles",
+       subtitle = paste0("Stress = ", round(nmds$stress, 3)))
+
+```
+
+```{r}
+
+## ------------------------------------------------------------
+## 4. Functional richness / diversity per sample
+## ------------------------------------------------------------
+
+diversity_df <- tibble(
+  sample   = rownames(mat),
+  richness = rowSums(mat > 0),
+  shannon  = diversity(mat, index = "shannon")
+) %>%
+  left_join(sample_meta, by = "sample")
+
+ggplot(diversity_df, aes(depth, shannon, fill = depth)) +
+  geom_col() +
+  facet_wrap(~station) +
+  theme_minimal(base_size = 13) +
+  labs(title = "KO Shannon diversity by station and depth",
+       y = "Shannon diversity (KO rel. abundance)", x = NULL) +
+  theme(legend.position = "none")
+
+```
+
+```{r}
+
+## ------------------------------------------------------------
+## 5. Targeted nitrogen-cycle KO heatmap
+##    — centrepiece figure linking coverage/rel_abundance to
+##    known denitrification / nitrification / anammox / DNRA genes
+## ------------------------------------------------------------
+
+# Double-check / extend these against KEGG and against what
+# anvi-estimate-metabolism / anvi-draw-kegg actually flagged —
+# some gene families map to more than one KO.
+n_cycle_kos <- tribble(
+  ~KO_ID,    ~gene,   ~pathway,
+  "K10944",  "amoA",  "Nitrification",
+  "K10945",  "amoB",  "Nitrification",
+  "K10946",  "amoC",  "Nitrification",
+  "K10535",  "hao",   "Nitrification",
+  "K00370",  "narG",  "Denitrification (NO3->NO2)",
+  "K00371",  "narH",  "Denitrification (NO3->NO2)",
+  "K02567",  "napA",  "Denitrification (NO3->NO2)",
+  "K02568",  "napB",  "Denitrification (NO3->NO2)",
+  "K00368",  "nirK",  "Denitrification (NO2->NO)",
+  "K15864",  "nirS",  "Denitrification (NO2->NO)",
+  "K04561",  "norB",  "Denitrification (NO->N2O)",
+  "K02305",  "norC",  "Denitrification (NO->N2O)",
+  "K00376",  "nosZ",  "Denitrification (N2O->N2)",
+  "K20932",  "hzsA",  "Anammox",
+  "K20933",  "hzsB",  "Anammox",
+  "K20934",  "hzsC",  "Anammox",
+  "K18601",  "hdh",   "Anammox",
+  "K03385",  "nrfA",  "DNRA"
+)
+
+n_cycle_long <- ko_long %>%
+  filter(KO_ID %in% n_cycle_kos$KO_ID) %>%
+  left_join(n_cycle_kos, by = "KO_ID")
+
+# Sanity check: flag any expected N-cycle KOs with zero hits
+# across all samples, and confirm which ones were actually found
+missing_n_cycle_kos <- setdiff(n_cycle_kos$KO_ID, unique(n_cycle_long$KO_ID))
+if (length(missing_n_cycle_kos) > 0) {
+  message("Not detected in any sample: ",
+          paste(missing_n_cycle_kos, collapse = ", "))
+}
+
+n_cycle_wide <- n_cycle_long %>%
+  mutate(label = paste(gene, KO_ID, sep = " | ")) %>%
+  select(label, pathway, sample, rel_abundance) %>%
+  pivot_wider(names_from = sample, values_from = rel_abundance, values_fill = 0)
+
+heat_mat <- n_cycle_wide %>%
+  select(-label, -pathway) %>%
+  as.matrix()
+rownames(heat_mat) <- n_cycle_wide$label
+
+annotation_row <- tibble(pathway = n_cycle_wide$pathway) %>%
+  as.data.frame()
+rownames(annotation_row) <- rownames(heat_mat)
+
+annotation_col <- sample_meta %>%
+  filter(sample %in% colnames(heat_mat)) %>%
+  column_to_rownames("sample") %>%
+  select(station, depth)
+
+pheatmap(
+  log1p(heat_mat * 1e6),   # scale up rel_abundance before log1p so small values remain visible
+  annotation_row    = annotation_row,
+  annotation_col    = annotation_col,
+  cluster_rows      = TRUE,
+  cluster_cols      = TRUE,
+  color             = colorRampPalette(brewer.pal(9, "YlOrRd"))(100),
+  main              = "Nitrogen-cycle gene relative abundance (log1p scaled)",
+  fontsize_row      = 9
+)
+
+```
+
+```{r}
+
+## ------------------------------------------------------------
+## 6. Which KOs vary most across depth / station?
+##    Rank-based approach — avoids forcing a count-based DE
+##    test onto coverage/rel_abundance data.
+## ------------------------------------------------------------
+
+depth_summary <- ko_long %>%
+  group_by(KO_ID, KO_function, depth) %>%
+  summarise(mean_rel_abundance = mean(rel_abundance), .groups = "drop") %>%
+  pivot_wider(names_from = depth, values_from = mean_rel_abundance, values_fill = 0)
+
+# Top 30 KOs most enriched Bottom vs Surface
+depth_summary %>%
+  mutate(log2fc_bottom_vs_surface = log2((Bottom + 1e-8) / (Surface + 1e-8))) %>%
+  arrange(desc(abs(log2fc_bottom_vs_surface))) %>%
+  slice_head(n = 30) %>%
+  select(KO_ID, KO_function, Surface, Mid, Bottom, log2fc_bottom_vs_surface)
+
+station_summary <- ko_long %>%
+  group_by(KO_ID, KO_function, station) %>%
+  summarise(mean_rel_abundance = mean(rel_abundance), .groups = "drop") %>%
+  pivot_wider(names_from = station, values_from = mean_rel_abundance, values_fill = 0)
+
+## For a formal statistical test, DESeq2 can be applied to a
+## KO x sample matrix built from raw `coverage` (not rel_abundance)
+## rounded to integers, with library size as size factors:
+##
+## library(DESeq2)
+## count_mat <- ko_long %>%
+##   select(KO_ID, sample, coverage) %>%
+##   pivot_wider(names_from = sample, values_from = coverage, values_fill = 0) %>%
+##   column_to_rownames("KO_ID") %>%
+##   round() %>%
+##   as.matrix()
+##
+## dds <- DESeqDataSetFromMatrix(
+##   countData = count_mat,
+##   colData   = sample_meta %>% column_to_rownames("sample"),
+##   design    = ~ depth
+## )
+## dds <- DESeq(dds)
+## res <- results(dds, contrast = c("depth", "Bottom", "Surface"))
+
+## ------------------------------------------------------------
+## 7. Link nitrogen-cycle genes back to taxonomy
+##    (requires importing anvi-run-scg-taxonomy output and
+##    joining on gene_id / gene_callers_id via genes_long_ko)
+## ------------------------------------------------------------
+
+# taxonomy <- read_tsv("data/St1_scg_taxonomy.tsv") %>%
+#   mutate(assembly = "St1")   # repeat per station, bind_rows()
+#
+# n_cycle_taxonomy <- genes_long_ko %>%
+#   filter(KO_ID %in% n_cycle_kos$KO_ID) %>%
+#   left_join(taxonomy, by = c("assembly", "gene_callers_id")) %>%
+#   left_join(n_cycle_kos, by = "KO_ID")
+#
+# n_cycle_taxonomy %>%
+#   count(pathway, gene, t_phylum, t_genus, sort = TRUE)
+#
+# Pairs with the heatmap above to argue not just *that* a pathway
+# is active, but *who* is driving it at each station/depth.
 ```
