@@ -378,145 +378,336 @@ ggplot(ko_long, aes(coverage)) +
 
 We can see that there are some KOs with extremely low coverage (<0.1). It's probably good to filter them out...
 
-First, let's do a simple normalisation and compute relative abundance within each sample
+### Normalising gene coverages
 
-```{r}
-ko_long <- ko_long %>%
-   group_by(sample) %>%
-   mutate(
-     rel_abundance = coverage / sum(coverage),
-     rel_percent = 100 * rel_abundance
-   ) %>%
-   ungroup()
+Gene coverages were normalised using the housekeeping genes **rpoB** and **gyrB**, which encode the β subunit of RNA polymerase and DNA gyrase B, respectively. These conserved core genes were used as reference markers to provide a measure of background cellular transcriptional activity within each sample. For each sample, the geometric mean of rpoB and gyrB coverage was used as the normalisation factor, reducing dependence on the expression of a single reference gene. Target-gene coverage was divided by this reference value, facilitating comparison of relative gene expression across samples and water-column depths while accounting for differences in overall transcript recovery and sequencing effort. As housekeeping-gene expression may vary with community composition and physiological state, the resulting values should be interpreted as relative expression normalised to community-level housekeeping transcription, rather than absolute expression per cell.
+
+```{r normalisation}
+
+# Extracting housekeeping KOs
+
+hk_kos <- c(
+  rpoB = "K03043",
+  gyrB = "K02470"
+)
+
+hk <- ko_long %>%
+  filter(KO_ID %in% hk_kos) %>%
+  select(sample, KO_ID, coverage) %>%
+  pivot_wider(
+    names_from = KO_ID,
+    values_from = coverage
+  ) %>%
+  rename(
+    rpoB = K03043,
+    gyrB = K02470
+  )
+
+# Calculate the geometric mean
+
+hk <- hk %>%
+  mutate(
+    hk_geomean = sqrt(rpoB * gyrB)
+  )
+
+# Add the normalisation factor to ko_long
+
+ko_long_norm <- ko_long %>%
+  left_join(
+    hk %>% select(sample, hk_geomean),
+    by = "sample"
+  ) %>%
+  mutate(
+    norm_coverage = coverage / hk_geomean
+  )
+
 ```
 
-```{r}
+## Exploration of whole-community functional profiles
+
+```{r echo=FALSE}
+
 ## ============================================================
-## Chukchi Sea metatranscriptomics — downstream gene expression
-## exploration and nitrogen-cycle pathway analysis
-##
-## Uses the existing `ko_long` tibble as-is:
-##   sample, station, depth, KO_ID, KO_function,
-##   coverage, n_genes, rel_abundance, rel_percent
-## Normalisation is already done (rel_abundance / rel_percent),
-## and low-confidence samples (S13S, negative control) are
-## already excluded — 8 samples remain.
+## Exploration of whole-community functional profiles
 ## ============================================================
 
-library(vegan)       # ordination
-library(pheatmap)    # heatmap plotting
+library(tidyverse)
+library(vegan)
+library(pheatmap)
 library(RColorBrewer)
 
-## ------------------------------------------------------------
-## 1. Sample metadata (one row per sample) — pulled straight
-##    out of ko_long rather than re-derived
-## ------------------------------------------------------------
+## 1. Sample metadata
 
-sample_meta <- ko_long %>%
+sample_meta <- ko_long_norm %>%
   distinct(sample, station, depth)
 
-## ------------------------------------------------------------
-## 2. Wide sample x KO matrix for ordination / clustering
-##    Using rel_abundance as it's already normalised for both
-##    library size and total coverage — the right basis for
-##    comparing community-wide functional profiles.
-## ------------------------------------------------------------
+## 2. Whole-community KO functional profiles using sample-wise relative abundance
 
-ko_matrix_rel <- ko_long %>%
-  select(KO_ID, KO_function, sample, rel_abundance) %>%
+ko_long_rel <- ko_long %>%
+  group_by(sample) %>%
+  mutate(
+    rel_abundance = coverage / sum(coverage, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+## 3. Create sample x KO matrix for ordination
+
+ko_matrix_rel <- ko_long_rel %>%
+  select(KO_ID, sample, rel_abundance) %>%
+  group_by(KO_ID, sample) %>%
+  summarise(
+    rel_abundance = sum(rel_abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
   pivot_wider(
-    names_from  = sample,
+    names_from = KO_ID,
     values_from = rel_abundance,
     values_fill = 0
   )
 
-mat <- ko_matrix_rel %>%
-  select(-KO_ID, -KO_function) %>%
-  as.matrix() %>%
-  t()
-colnames(mat) <- ko_matrix_rel$KO_ID
-# rows = samples, columns = KOs, values = rel_abundance
+## Convert to matrix:
+## rows = samples
+## columns = KOs
+## values = relative abundance
 
-## ------------------------------------------------------------
-## 3. Whole-community ordination (NMDS, Bray-Curtis)
-##    — check whether station and/or depth structure the
-##    overall functional profile before zooming into N-cycling
-## ------------------------------------------------------------
+mat_rel <- ko_matrix_rel %>%
+  column_to_rownames("sample") %>%
+  as.matrix()
 
-mat_hell <- decostand(mat, method = "hellinger")
+## 4. Remove uninformative KOs
+
+mat_rel <- mat_rel[
+  ,
+  apply(mat_rel, 2, var) > 0,
+  drop = FALSE
+]
+
+## 5. Whole-community ordination
 
 set.seed(1)
-nmds <- metaMDS(mat_hell, distance = "bray", k = 2, trymax = 100)
 
-nmds_scores <- as_tibble(scores(nmds, display = "sites"), rownames = "sample") %>%
-  left_join(sample_meta, by = "sample")
+nmds <- metaMDS(
+  mat_rel,
+  distance = "bray",
+  k = 2,
+  trymax = 100,
+  autotransform = FALSE
+)
 
-ggplot(nmds_scores, aes(NMDS1, NMDS2, color = station, shape = depth)) +
+## 6. Extract NMDS sample scores
+
+nmds_scores <- scores(
+  nmds,
+  display = "sites"
+) %>%
+  as.data.frame() %>%
+  rownames_to_column("sample") %>%
+  as_tibble() %>%
+  left_join(
+    sample_meta,
+    by = "sample"
+  )
+
+## 7. Plot NMDS
+
+ggplot(
+  nmds_scores,
+  aes(
+    x = NMDS1,
+    y = NMDS2,
+    color = station,
+    shape = depth
+  )
+) +
   geom_point(size = 4) +
-  geom_text(aes(label = sample), vjust = -1, size = 3, show.legend = FALSE) +
+  geom_text(
+    aes(label = sample),
+    vjust = -1,
+    size = 3,
+    show.legend = FALSE
+  ) +
   theme_minimal(base_size = 13) +
-  labs(title = "NMDS of KO functional profiles",
-       subtitle = paste0("Stress = ", round(nmds$stress, 3)))
+  labs(
+    title = "NMDS of KO functional profiles",
+    subtitle = paste0(
+      "Bray-Curtis dissimilarity; stress = ",
+      round(nmds$stress, 3)
+    ),
+    x = "NMDS1",
+    y = "NMDS2",
+    color = "Station",
+    shape = "Depth"
+  )
 
 ```
+
+Whole-community transcriptional functional profiles differed among stations and showed consistent vertical structuring, with mid-depth communities displaying distinct functional profiles relative to surface and bottom samples.
+
+Let's look at which KOs are driving these separations:
+
+```{r envfit}
+ko_fit <- envfit(nmds, mat_rel, permutations = 0)
+
+ko_vectors <- as.data.frame(
+  scores(ko_fit, display = "vectors")
+) %>%
+  rownames_to_column("KO_ID")
+
+ko_vectors$R2 <- ko_fit$vectors$r
+
+ko_vectors %>%
+  arrange(desc(R2)) %>%
+  slice_head(n = 20)
+```
+
+These top KOs show the functions most strongly associated with the NMDS structure. 
+**Note**: because I used permutations = 0, these are not significance-tested. They are simply the KOs whose abundance patterns best match the NMDS geometry.
+
+```{r}
+ko_top <- ko_vectors %>%
+  arrange(desc(R2)) %>%
+  slice_head(n = 20) %>%
+  left_join(
+    ko_long %>%
+      distinct(KO_ID, KO_function),
+    by = "KO_ID"
+  )
+
+ko_top %>%
+  select(KO_ID, KO_function, NMDS1, NMDS2, R2)
+```
+
+```{r top_20_KO_abundance}
+top20_long <- ko_long_rel %>%
+  filter(KO_ID %in% ko_top$KO_ID) %>%
+  select(sample, station, depth, KO_ID, KO_function, rel_abundance)
+
+top20_mat <- top20_long %>%
+  select(KO_ID, sample, rel_abundance) %>%
+  pivot_wider(
+    names_from = sample,
+    values_from = rel_abundance,
+    values_fill = 0
+  ) %>%
+  column_to_rownames("KO_ID") %>%
+  as.matrix()
+
+sample_annotation <- sample_meta %>%
+  select(sample, station, depth) %>%
+  column_to_rownames("sample")
+
+sample_annotation <- sample_annotation[
+  colnames(top20_mat),
+  ,
+  drop = FALSE
+]
+
+pheatmap(
+  top20_mat,
+  scale = "row",
+  cluster_cols = FALSE,
+  annotation_col = sample_annotation,
+  border_color = NA,
+  main = "Top KOs associated with NMDS structure"
+)
+```
+::: {.callout-note title="📝 NMDS interpretation"}
+
+The NMDS revealed clear structuring of overall KO functional profiles among samples (stress = 0.027), with separation associated with both station and depth. The KOs most strongly associated with the ordination included a mixture of core metabolic functions, bacterial transport/envelope functions, and several eukaryotic cellular processes (e.g. translation, cytoskeletal regulation and RNA processing). The heatmap of the top 20 NMDS-associated KOs showed coordinated differences across samples rather than dominance by a single function, with particularly distinct profiles in some bottom and surface samples. These results suggest that the ordination reflects broad shifts in community functional transcriptional composition, potentially influenced by changes in the relative contribution of different taxonomic groups, rather than variation in a single metabolic pathway.
+
+:::
 
 ```{r}
 
 ## ------------------------------------------------------------
-## 4. Functional richness / diversity per sample
+## 4. Functional richness and diversity per sample
+##
+## Richness = number of detected KOs
+## Shannon diversity = diversity of relative KO abundances
 ## ------------------------------------------------------------
 
 diversity_df <- tibble(
-  sample   = rownames(mat),
-  richness = rowSums(mat > 0),
-  shannon  = diversity(mat, index = "shannon")
+  sample   = rownames(mat_rel),
+  richness = rowSums(mat_rel > 0),
+  shannon  = diversity(mat_rel, index = "shannon")
 ) %>%
   left_join(sample_meta, by = "sample")
+
+
+## KO richness
+
+ggplot(diversity_df, aes(depth, richness, fill = depth)) +
+  geom_col() +
+  facet_wrap(~station) +
+  theme_minimal(base_size = 13) +
+  labs(
+    title = "KO functional richness by station and depth",
+    y = "Number of detected KOs",
+    x = NULL
+  ) +
+  theme(legend.position = "none")
+
+
+## KO Shannon diversity
 
 ggplot(diversity_df, aes(depth, shannon, fill = depth)) +
   geom_col() +
   facet_wrap(~station) +
   theme_minimal(base_size = 13) +
-  labs(title = "KO Shannon diversity by station and depth",
-       y = "Shannon diversity (KO rel. abundance)", x = NULL) +
+  labs(
+    title = "KO functional diversity by station and depth",
+    y = "Shannon diversity",
+    x = NULL
+  ) +
   theme(legend.position = "none")
-
 ```
 
-```{r}
+KO functional diversity was broadly comparable among stations and depths
 
-## ------------------------------------------------------------
+
+```{r N-cycle_heatmap, fig.width=10, fig.height=8}
+
 ## 5. Targeted nitrogen-cycle KO heatmap
-##    — centrepiece figure linking coverage/rel_abundance to
-##    known denitrification / nitrification / anammox / DNRA genes
-## ------------------------------------------------------------
 
-# Double-check / extend these against KEGG and against what
-# anvi-estimate-metabolism / anvi-draw-kegg actually flagged —
-# some gene families map to more than one KO.
 n_cycle_kos <- tribble(
   ~KO_ID,    ~gene,   ~pathway,
-  "K10944",  "amoA",  "Nitrification",
-  "K10945",  "amoB",  "Nitrification",
-  "K10946",  "amoC",  "Nitrification",
-  "K10535",  "hao",   "Nitrification",
-  "K00370",  "narG",  "Denitrification (NO3->NO2)",
-  "K00371",  "narH",  "Denitrification (NO3->NO2)",
-  "K02567",  "napA",  "Denitrification (NO3->NO2)",
-  "K02568",  "napB",  "Denitrification (NO3->NO2)",
-  "K00368",  "nirK",  "Denitrification (NO2->NO)",
-  "K15864",  "nirS",  "Denitrification (NO2->NO)",
-  "K04561",  "norB",  "Denitrification (NO->N2O)",
-  "K02305",  "norC",  "Denitrification (NO->N2O)",
-  "K00376",  "nosZ",  "Denitrification (N2O->N2)",
+
+  # Nitrogen fixation
+  "K02588",  "nifH",  "Nitrogen fixation",
+  "K02586",  "nifD",  "Nitrogen fixation",
+  "K02591",  "nifK",  "Nitrogen fixation",
+
+  # Ammonia oxidation
+  "K10944",  "amoA",  "Ammonia oxidation",
+  "K10945",  "amoB",  "Ammonia oxidation",
+  "K10946",  "amoC",  "Ammonia oxidation",
+  "K10535",  "hao",   "Hydroxylamine oxidation",
+
+  # Nitrite oxidation
+  "K00370",  "nxrA/narG", "Nitrite oxidation / nitrate reduction",
+  "K00371",  "nxrB/narH", "Nitrite oxidation / nitrate reduction",
+
+  # Nitrate reduction
+  "K02567",  "napA",  "Nitrate reduction",
+  "K02568",  "napB",  "Nitrate reduction",
+
+  # Denitrification
+  "K00368",  "nirK",  "NO2 -> NO",
+  "K15864",  "nirS",  "NO2 -> NO",
+  "K04561",  "norB",  "NO -> N2O",
+  "K02305",  "norC",  "NO -> N2O",
+  "K00376",  "nosZ",  "N2O -> N2",
+
+  # DNRA
+  "K03385",  "nrfA",  "DNRA",
+
+  # Anammox
   "K20932",  "hzsA",  "Anammox",
   "K20933",  "hzsB",  "Anammox",
   "K20934",  "hzsC",  "Anammox",
-  "K18601",  "hdh",   "Anammox",
-  "K03385",  "nrfA",  "DNRA"
+  "K18601",  "hdh",   "Anammox"
 )
-
-n_cycle_long <- ko_long %>%
+n_cycle_long <- ko_long_norm %>%
   filter(KO_ID %in% n_cycle_kos$KO_ID) %>%
   left_join(n_cycle_kos, by = "KO_ID")
 
@@ -530,8 +721,8 @@ if (length(missing_n_cycle_kos) > 0) {
 
 n_cycle_wide <- n_cycle_long %>%
   mutate(label = paste(gene, KO_ID, sep = " | ")) %>%
-  select(label, pathway, sample, rel_abundance) %>%
-  pivot_wider(names_from = sample, values_from = rel_abundance, values_fill = 0)
+  select(label, pathway, sample, norm_coverage) %>%
+  pivot_wider(names_from = sample, values_from = norm_coverage, values_fill = 0)
 
 heat_mat <- n_cycle_wide %>%
   select(-label, -pathway) %>%
@@ -548,17 +739,208 @@ annotation_col <- sample_meta %>%
   select(station, depth)
 
 pheatmap(
-  log1p(heat_mat * 1e6),   # scale up rel_abundance before log1p so small values remain visible
+  heat_mat,   # scale up norm_coverage before log1p so small values remain visible
   annotation_row    = annotation_row,
   annotation_col    = annotation_col,
-  cluster_rows      = TRUE,
-  cluster_cols      = TRUE,
+  cluster_rows      = FALSE,
+  cluster_cols      = FALSE,
   color             = colorRampPalette(brewer.pal(9, "YlOrRd"))(100),
-  main              = "Nitrogen-cycle gene relative abundance (log1p scaled)",
+  main              = "Housekeeping-normalised N-cycle gene coverage",
   fontsize_row      = 9
 )
 
 ```
+The strong expression of **amoABC**, together with high **nirK** and very low **hao**, is consistent with nitrification being dominated by **ammonia-oxidising archaea**, in agreement with previous observations. 
+In contrast, genes associated with other nitrogen-cycle pathways were generally expressed at much lower levels across the samples.
+
+```{r C-cycle_heatmap, fig.width=10, fig.height=8}
+
+c_cycle_kos <- tribble(
+  ~KO_ID,    ~gene,       ~pathway,
+
+  # ----------------------------------------------------------
+  # Calvin-Benson-Bassham cycle
+  # ----------------------------------------------------------
+  "K01601",  "rbcL",      "Calvin cycle",
+  "K01602",  "rbcS",      "Calvin cycle",
+  "K00855",  "prk",       "Calvin cycle",
+
+  # ----------------------------------------------------------
+  # Reverse TCA cycle
+  # ----------------------------------------------------------
+  "K15230",  "aclA",      "Reverse TCA cycle",
+  "K15231",  "aclB",      "Reverse TCA cycle",
+
+  # ----------------------------------------------------------
+  # 3-HP / 4-HB carbon fixation
+  # ----------------------------------------------------------
+  "K14534",  "abfD",      "3HP/4HB carbon fixation",
+
+  # ----------------------------------------------------------
+  # Wood-Ljungdahl pathway
+  # ----------------------------------------------------------
+  "K14138",  "acsB",      "Wood-Ljungdahl pathway",
+  "K00198",  "cooS/acsA", "Wood-Ljungdahl pathway",
+
+  # ----------------------------------------------------------
+  # Methanogenesis
+  # ----------------------------------------------------------
+  "K00399",  "mcrA",      "Methanogenesis",
+  "K00401",  "mcrB",      "Methanogenesis",
+  "K00402",  "mcrG",      "Methanogenesis",
+
+  # ----------------------------------------------------------
+  # Methane oxidation
+  # ----------------------------------------------------------
+  "K10944",  "pmoA",      "Methane oxidation",
+  "K10945",  "pmoB/amoB", "Methane oxidation",
+  "K10946",  "pmoC/amoC", "Methane oxidation",
+
+  # Soluble methane monooxygenase
+  "K16157",  "mmoX",      "Methane oxidation",
+  "K16158",  "mmoY",      "Methane oxidation",
+  "K16159",  "mmoZ",      "Methane oxidation",
+
+  # ----------------------------------------------------------
+  # Methanol oxidation / methylotrophy
+  # ----------------------------------------------------------
+  "K14028",  "mxaF",      "Methanol oxidation",
+  "K14029",  "mxaI",      "Methanol oxidation",
+  "K23995",  "xoxF",      "Methanol oxidation",
+
+  # ----------------------------------------------------------
+  # Aerobic carbon monoxide oxidation
+  # ----------------------------------------------------------
+  "K03518",  "coxS",      "CO oxidation",
+  "K03519",  "coxM",      "CO oxidation",
+  "K03520",  "coxL",      "CO oxidation"
+)
+c_cycle_long <- ko_long_norm %>%
+  filter(KO_ID %in% c_cycle_kos$KO_ID) %>%
+  left_join(c_cycle_kos, by = "KO_ID")
+
+missing_c_cycle_kos <- setdiff(
+  c_cycle_kos$KO_ID,
+  unique(c_cycle_long$KO_ID)
+)
+
+if (length(missing_c_cycle_kos) > 0) {
+  message(
+    "Not detected in any sample: ",
+    paste(missing_c_cycle_kos, collapse = ", ")
+  )
+}
+
+c_cycle_wide <- c_cycle_long %>%
+  mutate(label = paste(gene, KO_ID, sep = " | ")) %>%
+  select(label, pathway, sample, norm_coverage) %>%
+  pivot_wider(
+    names_from = sample,
+    values_from = norm_coverage,
+    values_fill = 0
+  )
+
+c_heat_mat <- c_cycle_wide %>%
+  select(-label, -pathway) %>%
+  as.matrix()
+
+rownames(c_heat_mat) <- c_cycle_wide$label
+
+c_annotation_row <- tibble(
+  pathway = c_cycle_wide$pathway
+) %>%
+  as.data.frame()
+
+rownames(c_annotation_row) <- rownames(c_heat_mat)
+
+c_annotation_col <- sample_meta %>%
+  filter(sample %in% colnames(c_heat_mat)) %>%
+  column_to_rownames("sample") %>%
+  select(station, depth)
+
+pheatmap(
+  c_heat_mat,
+  annotation_row = c_annotation_row,
+  annotation_col = c_annotation_col,
+  cluster_rows = FALSE,
+  cluster_cols = TRUE,
+  color = colorRampPalette(brewer.pal(9, "YlOrRd"))(100),
+  main = "Housekeeping-normalised C-cycle gene coverage",
+  fontsize_row = 9
+)
+```
+
+Carbon-cycle transcription was strongly dominated by Calvin-cycle markers, particularly rbcL and rbcS, indicating that Calvin-cycle carbon fixation was the most prominent autotrophic carbon-assimilation pathway across the samples.
+
+**BUT** rbcL and rbcS have super high values so let's remove them as it could be masking some patterns!
+
+```{r C-cycle_heatmap_2, fig.width=10, fig.height=8}
+
+c_cycle_long <- ko_long_norm %>%
+  filter(KO_ID %in% c_cycle_kos$KO_ID,
+        !KO_ID %in% c("K01601", "K01602")) %>%
+  left_join(c_cycle_kos, by = "KO_ID")
+
+missing_c_cycle_kos <- setdiff(
+  c_cycle_kos$KO_ID,
+  unique(c_cycle_long$KO_ID)
+)
+
+if (length(missing_c_cycle_kos) > 0) {
+  message(
+    "Not detected in any sample: ",
+    paste(missing_c_cycle_kos, collapse = ", ")
+  )
+}
+
+c_cycle_wide <- c_cycle_long %>%
+  mutate(label = paste(gene, KO_ID, sep = " | ")) %>%
+  select(label, pathway, sample, norm_coverage) %>%
+  pivot_wider(
+    names_from = sample,
+    values_from = norm_coverage,
+    values_fill = 0
+  )
+
+c_heat_mat <- c_cycle_wide %>%
+  select(-label, -pathway) %>%
+  as.matrix()
+
+rownames(c_heat_mat) <- c_cycle_wide$label
+
+c_annotation_row <- tibble(
+  pathway = c_cycle_wide$pathway
+) %>%
+  as.data.frame()
+
+rownames(c_annotation_row) <- rownames(c_heat_mat)
+
+c_annotation_col <- sample_meta %>%
+  filter(sample %in% colnames(c_heat_mat)) %>%
+  column_to_rownames("sample") %>%
+  select(station, depth)
+
+pheatmap(
+  c_heat_mat,
+  annotation_row = c_annotation_row,
+  annotation_col = c_annotation_col,
+  cluster_rows = FALSE,
+  cluster_cols = TRUE,
+  color = colorRampPalette(brewer.pal(9, "YlOrRd"))(100),
+  main = "Housekeeping-normalised C-cycle gene coverage",
+  fontsize_row = 9
+)
+```
+
+Expression of xoxF suggests active methylotrophy in the water column, potentially reflecting bacterial utilisation of methanol and other C1 compounds released during phytoplankton production and organic-matter degradation.
+
+
+
+
+
+
+
+
 
 ```{r}
 
@@ -567,23 +949,23 @@ pheatmap(
 ##    Rank-based approach — avoids forcing a count-based DE
 ##    test onto coverage/rel_abundance data.
 ## ------------------------------------------------------------
-
-depth_summary <- ko_long %>%
-  group_by(KO_ID, KO_function, depth) %>%
-  summarise(mean_rel_abundance = mean(rel_abundance), .groups = "drop") %>%
-  pivot_wider(names_from = depth, values_from = mean_rel_abundance, values_fill = 0)
-
-# Top 30 KOs most enriched Bottom vs Surface
-depth_summary %>%
-  mutate(log2fc_bottom_vs_surface = log2((Bottom + 1e-8) / (Surface + 1e-8))) %>%
-  arrange(desc(abs(log2fc_bottom_vs_surface))) %>%
-  slice_head(n = 30) %>%
-  select(KO_ID, KO_function, Surface, Mid, Bottom, log2fc_bottom_vs_surface)
-
-station_summary <- ko_long %>%
-  group_by(KO_ID, KO_function, station) %>%
-  summarise(mean_rel_abundance = mean(rel_abundance), .groups = "drop") %>%
-  pivot_wider(names_from = station, values_from = mean_rel_abundance, values_fill = 0)
+# 
+# depth_summary <- ko_long %>%
+#   group_by(KO_ID, KO_function, depth) %>%
+#   summarise(mean_rel_abundance = mean(rel_abundance), .groups = "drop") %>%
+#   pivot_wider(names_from = depth, values_from = mean_rel_abundance, values_fill = 0)
+# 
+# # Top 30 KOs most enriched Bottom vs Surface
+# depth_summary %>%
+#   mutate(log2fc_bottom_vs_surface = log2((Bottom + 1e-8) / (Surface + 1e-8))) %>%
+#   arrange(desc(abs(log2fc_bottom_vs_surface))) %>%
+#   slice_head(n = 30) %>%
+#   select(KO_ID, KO_function, Surface, Mid, Bottom, log2fc_bottom_vs_surface)
+# 
+# station_summary <- ko_long %>%
+#   group_by(KO_ID, KO_function, station) %>%
+#   summarise(mean_rel_abundance = mean(rel_abundance), .groups = "drop") %>%
+#   pivot_wider(names_from = station, values_from = mean_rel_abundance, values_fill = 0)
 
 ## For a formal statistical test, DESeq2 can be applied to a
 ## KO x sample matrix built from raw `coverage` (not rel_abundance)
