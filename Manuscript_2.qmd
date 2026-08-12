@@ -425,7 +425,7 @@ ko_long_norm <- ko_long %>%
 
 ## Exploration of whole-community functional profiles
 
-```{r echo=FALSE}
+```{r NMDS, echo=FALSE}
 
 ## ============================================================
 ## Exploration of whole-community functional profiles
@@ -632,21 +632,6 @@ diversity_df <- tibble(
   shannon  = diversity(mat_rel, index = "shannon")
 ) %>%
   left_join(sample_meta, by = "sample")
-
-
-## KO richness
-
-ggplot(diversity_df, aes(depth, richness, fill = depth)) +
-  geom_col() +
-  facet_wrap(~station) +
-  theme_minimal(base_size = 13) +
-  labs(
-    title = "KO functional richness by station and depth",
-    y = "Number of detected KOs",
-    x = NULL
-  ) +
-  theme(legend.position = "none")
-
 
 ## KO Shannon diversity
 
@@ -932,78 +917,155 @@ pheatmap(
 )
 ```
 
+The main pattern is that the apparent methane oxidation signal (pmoA/B/C) is relatively strong across many samples... **However**, these KOs overlap with amoABC and reflect the archaeal nitrification signal we already identified.
+
 Expression of xoxF suggests active methylotrophy in the water column, potentially reflecting bacterial utilisation of methanol and other C1 compounds released during phytoplankton production and organic-matter degradation.
 
 
+# unsupervised functional exploration
+
+```{r exploration, fig.width=10, fig.height=10}
+
+## Identify most variable KOs
+
+ko_variable <- ko_long_norm %>%
+  group_by(KO_ID, KO_function) %>%
+  summarise(
+    variance = var(norm_coverage, na.rm = TRUE),
+    mean_coverage = mean(norm_coverage, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(mean_coverage > 0) %>%
+  arrange(desc(variance))
+
+top_kos <- ko_variable %>%
+  slice_head(n = 50)
 
 
+## Create matrix
+
+top_ko_mat <- ko_long_norm %>%
+  filter(KO_ID %in% top_kos$KO_ID) %>%
+  select(KO_ID, sample, norm_coverage) %>%
+  pivot_wider(
+    names_from = sample,
+    values_from = norm_coverage,
+    values_fill = 0
+  ) %>%
+  column_to_rownames("KO_ID") %>%
+  as.matrix()
 
 
+## Sample annotation
 
+annotation_col <- sample_meta %>%
+  filter(sample %in% colnames(top_ko_mat)) %>%
+  column_to_rownames("sample") %>%
+  select(station, depth)
+
+
+## Plot
+
+pheatmap(
+  top_ko_mat,
+  scale = "row",
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  annotation_col = annotation_col,
+  show_rownames = TRUE,
+  border_color = NA,
+  main = "Most variable KO expression profiles"
+)
+```
+
+```{r}
+ph <- pheatmap(
+  top_ko_mat,
+  scale = "row",
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  annotation_col = annotation_col,
+  show_rownames = TRUE,
+  border_color = NA,
+  main = "Most variable KO expression profiles", 
+  silent = TRUE
+)
+
+ko_clusters <- cutree(
+  ph$tree_row,
+  k = 4
+)
+
+ko_cluster_df <- tibble(
+  KO_ID = names(ko_clusters),
+  cluster = ko_clusters
+) %>%
+  left_join(
+    ko_long_norm %>%
+      distinct(KO_ID, KO_function),
+    by = "KO_ID"
+  ) %>%
+  arrange(cluster)
+
+ko_cluster_df
+```
+
+```{r}
+ko_cluster_summary <- ko_cluster_df %>%
+  group_by(cluster) %>%
+  summarise(
+    n_KOs = n(),
+    functions = paste(KO_function, collapse = "; "),
+    .groups = "drop"
+  )
+
+ko_cluster_summary
+```
+:: {.callout-note title="📝 Cluster interpretation"}
+
+Clustering of the 50 most variable KOs revealed distinct functional signatures across samples. One cluster was dominated by nutrient-transport and substrate-acquisition genes, suggesting variation in heterotrophic resource utilisation. A small but highly coherent cluster comprising amoC and nirK reflected the previously identified nitrification signal. A larger cluster containing rbcL, rbcS and energy-metabolism genes was consistent with autotrophic and photosynthetic activity, while a fourth cluster contained genes associated with motility, protein-folding stress responses and cytoskeletal functions. Together, these patterns indicate coordinated shifts in major metabolic and cellular strategies across stations and depths.
+
+:::
+
+## Linking function to taxonomy
+
+To get the taxonomy of the genes, we need to go back to Anvi'o and export the gene sequences, classify them with a taxonomic classifier (Kaiju), then import those assignments back into anvi’o.
+
+```bash
+anvi-get-sequences-for-gene-calls \
+  -c St1_contigs.db \
+  --get-aa-sequences \
+  -o St1_genes.faa
+```
+
+To assign taxonomy to the genes, we will use Kaiju **nr_euk** database
+
+Why: we are working with marine metatranscriptomic genes and our functional clusters clearly contain both prokaryotic and eukaryotic signals. The standard Kaiju RefSeq database is mainly bacteria, archaea and viruses, whereas nr_euk additionally includes fungi and microbial eukaryotes, which is important if we want to capture phytoplankton and other marine eukaryotes.
+
+```bash
+kaiju   
+  -t ~/ote_db/kaiju_db/nr_euk/nodes.dmp \
+  -f ~/ote_db/kaiju_db/nr_euk/kaiju_db_nr_euk.fmi \
+  -i St1_genes.faa \
+  -o St1_genes_kaiju.out \
+  -z 60
+```
+2,028,862 query genes were processed
+
+```bash
+kaiju-addTaxonNames \
+  -t kaiju_db/nr_euk/nodes.dmp \
+  -n kaiju_db/nr_euk/names.dmp \
+  -i St1_genes_kaiju.out \
+  -o St1_genes_kaiju_names.out \
+  -r superkingdom,phylum,class,order,family,genus,species
+```
+
+```{r}
+
+```
 
 
 ```{r}
 
-## ------------------------------------------------------------
-## 6. Which KOs vary most across depth / station?
-##    Rank-based approach — avoids forcing a count-based DE
-##    test onto coverage/rel_abundance data.
-## ------------------------------------------------------------
-# 
-# depth_summary <- ko_long %>%
-#   group_by(KO_ID, KO_function, depth) %>%
-#   summarise(mean_rel_abundance = mean(rel_abundance), .groups = "drop") %>%
-#   pivot_wider(names_from = depth, values_from = mean_rel_abundance, values_fill = 0)
-# 
-# # Top 30 KOs most enriched Bottom vs Surface
-# depth_summary %>%
-#   mutate(log2fc_bottom_vs_surface = log2((Bottom + 1e-8) / (Surface + 1e-8))) %>%
-#   arrange(desc(abs(log2fc_bottom_vs_surface))) %>%
-#   slice_head(n = 30) %>%
-#   select(KO_ID, KO_function, Surface, Mid, Bottom, log2fc_bottom_vs_surface)
-# 
-# station_summary <- ko_long %>%
-#   group_by(KO_ID, KO_function, station) %>%
-#   summarise(mean_rel_abundance = mean(rel_abundance), .groups = "drop") %>%
-#   pivot_wider(names_from = station, values_from = mean_rel_abundance, values_fill = 0)
-
-## For a formal statistical test, DESeq2 can be applied to a
-## KO x sample matrix built from raw `coverage` (not rel_abundance)
-## rounded to integers, with library size as size factors:
-##
-## library(DESeq2)
-## count_mat <- ko_long %>%
-##   select(KO_ID, sample, coverage) %>%
-##   pivot_wider(names_from = sample, values_from = coverage, values_fill = 0) %>%
-##   column_to_rownames("KO_ID") %>%
-##   round() %>%
-##   as.matrix()
-##
-## dds <- DESeqDataSetFromMatrix(
-##   countData = count_mat,
-##   colData   = sample_meta %>% column_to_rownames("sample"),
-##   design    = ~ depth
-## )
-## dds <- DESeq(dds)
-## res <- results(dds, contrast = c("depth", "Bottom", "Surface"))
-
-## ------------------------------------------------------------
-## 7. Link nitrogen-cycle genes back to taxonomy
-##    (requires importing anvi-run-scg-taxonomy output and
-##    joining on gene_id / gene_callers_id via genes_long_ko)
-## ------------------------------------------------------------
-
-# taxonomy <- read_tsv("data/St1_scg_taxonomy.tsv") %>%
-#   mutate(assembly = "St1")   # repeat per station, bind_rows()
-#
-# n_cycle_taxonomy <- genes_long_ko %>%
-#   filter(KO_ID %in% n_cycle_kos$KO_ID) %>%
-#   left_join(taxonomy, by = c("assembly", "gene_callers_id")) %>%
-#   left_join(n_cycle_kos, by = "KO_ID")
-#
-# n_cycle_taxonomy %>%
-#   count(pathway, gene, t_phylum, t_genus, sort = TRUE)
-#
-# Pairs with the heatmap above to argue not just *that* a pathway
-# is active, but *who* is driving it at each station/depth.
 ```
