@@ -1048,6 +1048,8 @@ kaiju
   -f ~/ote_db/kaiju_db/nr_euk/kaiju_db_nr_euk.fmi \
   -i St1_genes.faa \
   -o St1_genes_kaiju.out \
+  -p \
+  -v \
   -z 60
 ```
 2,028,862 query genes were processed
@@ -1061,10 +1063,17 @@ kaiju-addTaxonNames \
   -r superkingdom,phylum,class,order,family,genus,species
 ```
 
-```{r}
+Then I can import back the gene-level taxonomy annotations into anvio using:
 
+```bash
+anvi-import-taxonomy-for-genes \
+  -c St1_contigs.db \
+  -i St1_genes_kaiju_names.out \
+  -p kaiju
 ```
-
+For St1, 776,186 splits (54.2%) were annotated taxonomically
+For St2, 766,028 splits (41.6%) were annotated taxonomically
+For St3, 577,084 splits (44.2%) were annotated taxonomically
 
 ```{r}
 
