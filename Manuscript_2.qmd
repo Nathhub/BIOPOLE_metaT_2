@@ -1075,6 +1075,154 @@ For St1, 776,186 splits (54.2%) were annotated taxonomically
 For St2, 766,028 splits (41.6%) were annotated taxonomically
 For St3, 577,084 splits (44.2%) were annotated taxonomically
 
-```{r}
+However, we don't really need to import the Kaiju output into anvio because we can use it directly and import it to R (because it has already the gene_callers_id and associated taxonomy).
+Let's, parse St1_genes_kaiju_names.out in R and join it to genes_long using gene_callers_id (plus assembly to make IDs globally unique).
 
+```{r kaiju_import, eval=FALSE}
+read_kaiju_tax <- function(file, assembly) {
+
+  read_lines(file) %>%
+    keep(~ str_starts(.x, "C\t")) %>%
+    str_split_fixed("\t", 8) %>%
+    as_tibble(.name_repair = "minimal") %>%
+    set_names(c(
+      "status",
+      "gene_callers_id",
+      "taxon_id",
+      "score",
+      "match_taxon_ids",
+      "accessions",
+      "match_sequences",
+      "taxonomy"
+    )) %>%
+    separate(
+      taxonomy,
+      into = c(
+        "superkingdom",
+        "phylum",
+        "class",
+        "order",
+        "family",
+        "genus",
+        "species"
+      ),
+      sep = ";",
+      fill = "right",
+      extra = "drop"
+    ) %>%
+    mutate(
+      across(
+        c(superkingdom, phylum, class, order, family, genus, species),
+        ~ na_if(str_trim(.x), "NA")
+      ),
+      gene_callers_id = as.integer(gene_callers_id),
+      taxon_id = as.integer(taxon_id),
+      assembly = assembly,
+      gene_id = paste(assembly, gene_callers_id, sep = "_")
+    )
+}
+
+
+tax_st1 <- read_kaiju_tax(
+  "data/St1_genes_kaiju_names.out",
+  "St1"
+)
+
+tax_st2 <- read_kaiju_tax(
+  "data/St2_genes_kaiju_names.out",
+  "St2"
+)
+
+tax_st3 <- read_kaiju_tax(
+  "data/St3_genes_kaiju_names.out",
+  "St3"
+)
+
+taxonomy_all <- bind_rows(
+  tax_st1,
+  tax_st2,
+  tax_st3
+)
+
+saveRDS(taxonomy_all, "data/taxonomy_all.rds")
+
+```
+
+```{r join_taxonomy}
+
+taxonomy_all <- readRDS("data/taxonomy_all.rds")
+
+# Join it to genes_long
+
+genes_long_tax <- genes_long %>%
+  left_join(
+    taxonomy_all %>%
+      select(
+        gene_id,
+        taxon_id,
+        superkingdom,
+        phylum,
+        class,
+        order,
+        family,
+        genus,
+        species
+      ),
+    by = "gene_id"
+  )
+
+# Check how much taxonomy was recovered among KO-annotated genes
+
+genes_long_tax %>%
+  filter(!is.na(KO_ID)) %>%
+  distinct(gene_id, .keep_all = TRUE) %>%
+  summarise(
+    n_KO_genes = n(),
+    classified = sum(!is.na(superkingdom)),
+    classified_percent = 100 * mean(!is.na(superkingdom))
+  )
+```
+
+Excellent! 83.4% of my KO-annotated genes have a taxonomic assignment.
+
+That means my taxonomy coverage is very good for the actual functional analysis. I am now comfortable moving on to ask which taxa contribute the expression of the KOs in clusters 1–4.
+
+```{r join_taxo_clusters}
+
+cluster_genes_tax <- genes_long_tax %>%
+  filter(!is.na(KO_ID)) %>%
+  separate_longer_delim(KO_ID, delim = ";") %>%
+  mutate(KO_ID = str_trim(KO_ID)) %>%
+  inner_join(
+    ko_cluster_df %>% select(KO_ID, cluster),
+    by = "KO_ID"
+  )
+
+# Summarising taxonomic contribution, for example at genus level:
+
+cluster_tax_genus <- cluster_genes_tax %>%
+  filter(!is.na(genus)) %>%
+  group_by(cluster, sample, genus) %>%
+  summarise(
+    coverage = sum(coverage, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(cluster, sample) %>%
+  mutate(
+    rel_contribution = coverage / sum(coverage)
+  ) %>%
+  ungroup()
+
+# see the main taxa driving each cluster:
+
+top_cluster_genera <- cluster_tax_genus %>%
+  group_by(cluster, genus) %>%
+  summarise(
+    mean_contribution = mean(rel_contribution, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(cluster) %>%
+  slice_max(mean_contribution, n = 10)
+
+top_cluster_genera
 ```
