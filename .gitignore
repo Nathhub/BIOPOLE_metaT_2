@@ -6,4 +6,4 @@
 /.quarto/
 **/*.quarto_ipynb
 
-data/*_gene_coverage_annotations.tsv
+data/
