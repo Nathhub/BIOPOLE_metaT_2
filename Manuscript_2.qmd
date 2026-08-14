@@ -1215,14 +1215,131 @@ cluster_tax_genus <- cluster_genes_tax %>%
 
 # see the main taxa driving each cluster:
 
-top_cluster_genera <- cluster_tax_genus %>%
+top_cluster_genera <- cluster_genes_tax %>%
+  filter(!is.na(genus)) %>%
   group_by(cluster, genus) %>%
   summarise(
-    mean_contribution = mean(rel_contribution, na.rm = TRUE),
+    coverage = sum(coverage, na.rm = TRUE),
     .groups = "drop"
   ) %>%
   group_by(cluster) %>%
-  slice_max(mean_contribution, n = 10)
+  mutate(
+    contribution = coverage / sum(coverage)
+  ) %>%
+  slice_max(contribution, n = 10) %>%
+  arrange(cluster, desc(contribution))
 
 top_cluster_genera
 ```
+
+```{r taxo_figure, fig.width=8, fig.height=6}
+library(tidytext)
+
+cluster_genus_sum <- cluster_genes_tax %>%
+  filter(!is.na(genus)) %>%
+  group_by(cluster, genus) %>%
+  summarise(
+    coverage = sum(coverage, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(cluster) %>%
+  mutate(
+    contribution = coverage / sum(coverage)
+  ) %>%
+  ungroup()
+
+my_colors <- c(
+  "#FF6666", "#8DD3C7", "#377EB8", "#4DAF4A",
+  "#984EA3", "#A6D854", "#FFFF33", "#FF7F00",
+  "#F781BF", "#999999", "#66C2A5", "#FC8D62",
+  "#8DA0CB", "#E78AC3", "#FFD92F", "#E5C494",
+  "#B3B3B3", "#A65628", "#FFFFB3", "#BEBADA",
+  "#FB8072", "#80B1D3", "#FDB462"
+)
+
+# Keep genera >=1% within at least one cluster
+cluster_genus_plot <- cluster_genus_sum %>%
+  mutate(
+    genus_plot = if_else(contribution >= 0.01, genus, "Other")
+  ) %>%
+  group_by(cluster, genus_plot) %>%
+  summarise(
+    contribution = sum(contribution),
+    .groups = "drop"
+  )
+
+# Order genera by total contribution across all clusters
+genus_order <- cluster_genus_plot %>%
+  filter(genus_plot != "Other") %>%
+  group_by(genus_plot) %>%
+  summarise(total = sum(contribution), .groups = "drop") %>%
+  arrange(desc(total)) %>%
+  pull(genus_plot)
+
+cluster_genus_plot <- cluster_genus_plot %>%
+  mutate(
+    genus_plot = factor(
+      genus_plot,
+      levels = c(genus_order, "Other")
+    )
+  )
+
+# Generate enough colours from your palette
+genus_colors <- colorRampPalette(my_colors)(
+  length(genus_order)
+)
+
+names(genus_colors) <- genus_order
+
+genus_colors <- c(
+  genus_colors,
+  Other = "grey80"
+)
+
+ggplot(
+  cluster_genus_plot,
+  aes(
+    x = factor(cluster),
+    y = contribution,
+    fill = genus_plot
+  )
+) +
+  geom_col(
+    width = 0.8,
+    color = "white",
+    linewidth = 0.2
+  ) +
+  scale_fill_manual(
+    values = genus_colors,
+    drop = FALSE
+  ) +
+  scale_y_continuous(
+    labels = scales::percent_format(),
+    expand = c(0, 0)
+  ) +
+  labs(
+    title = "Taxonomic contribution to functional KO clusters",
+    x = "KO cluster",
+    y = "Relative contribution",
+    fill = "Genus"
+  ) +
+  guides(
+    fill = guide_legend(
+      ncol = 2,
+      byrow = TRUE
+    )
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(size = 12),
+    legend.text = element_text(size = 9)
+  )
+
+```
+**Taxonomic contribution to functional KO clusters**. Relative genus-level contribution to the transcript coverage of each of the four KO clusters identified from the 50 most variable KO expression profiles. Genera contributing ≥1% within a cluster are shown individually, while lower-abundance taxa are grouped as Other.
+
+
+::: {.callout-note title="Figure interpretation"}
+The four KO clusters showed distinct taxonomic signatures. Cluster 1 was strongly dominated by *Pelagibacter*, consistent with a resource-acquisition and heterotrophic metabolism profile. Cluster 2 was dominated by nitrifying taxa, particularly *Nitrosopumilus*, with additional contributions from *Nitrosovibrio* and *Nitrosomonas*, supporting the archaeal nitrification signal identified previously. Cluster 3 was taxonomically more diverse and included several phytoplankton genera such as *Chaetoceros*, *Cylindrotheca*, *Micromonas*, *Thalassiosira* and *Phaeocystis*, consistent with autotrophic and photosynthetic functions. Cluster 4 comprised a broader mixture of marine bacterial taxa.
+:::
