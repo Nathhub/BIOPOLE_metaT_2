@@ -31,6 +31,73 @@ code {
 
 This report summarises the bioinformatics workflow applied to the Chukchi Sea eRNA samples to explore the metabolic pathways active and highly expressed, invovled in biogeochemical cycles.
 
+# Context
+
+Samples were collected aboard the R/V *Sikuliaq* during the 2023 DBO/ECO-Foci cruise (SKQ23-12S) in the **northern Bering** and **Chukchi Seas** between **10 September and 1 October 2023**. Sampling targeted repeat stations from the long-term DBO/ECO-Foci programmes across the northern Bering and Chukchi Shelf regions. The cruise took place during autumn, close to the annual sea-ice minimum, when surface nutrient depletion may begin to relax through wind-driven mixing and episodic resuspension. Hydrographic conditions were characterised using CTD profiles, while dissolved inorganic nutrients, including nitrate, nitrite, ammonium, phosphate and silicate, were measured from Niskin bottle samples collected at each station.
+
+```{r map, fig.width=6, fig.height=8}
+library(tidyverse)
+library(readxl)
+library(ggOceanMaps)
+
+metadata <- read_excel("data/BIOPOLE_metadata.xlsx")
+
+stations <- metadata %>%
+  distinct(station, latitude, longitude)
+
+basemap(
+  shapefiles = "DecimalDegree",
+  limits = c(-175, -160, 63, 73),
+  bathy.style = "raster_continuous_blues"
+) +
+  geom_point(
+    data = stations,
+    aes(x = longitude, y = latitude),
+    shape = 21,
+    fill = "red",
+    colour = "black",
+    size = 3.5,
+    stroke = 0.5
+  ) +
+  geom_text(
+    data = stations,
+    aes(
+      x = longitude,
+      y = latitude,
+      label = station
+    ),
+    nudge_y = 0.25,
+    fontface = "bold",
+    size = 3.5
+  ) +
+  labs(
+    x = NULL,
+    y = NULL
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_line(
+      colour = "grey85",
+      linewidth = 0.3
+    ),
+    panel.grid.minor = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_text(size = 9),
+    panel.border = element_rect(
+      colour = "black",
+      fill = NA,
+      linewidth = 0.7
+    )
+  )
+```
+**Figure 1**. Map of the Bering and Chukchi Sea region showing the positions of sampled stations in the North Bering Sea (NB), Southern Chukchi Sea (SC) and Northern Chukchi Sea (NC). 
+
+```{r metadata_table}
+metadata %>%
+  select(sample_alias, sample_title, station, old_name) %>%
+  knitr::kable()
+```
+
 ## 🧪 Sample Processing, Sequencing & Data Availability
 
 The Centre for Genomic Research (CGR) processed **9 marine eRNA samples** (+ 1 negative control) for metatranscriptomic sequencing as part of project **SSP203072**. The workflow included:
@@ -256,6 +323,8 @@ Renders KEGG metabolic pathway diagrams annotated with detected genes, enabling 
 
 These tools collectively provide a pathway-level view of nitrogen cycling activity in the Chukchi Sea microbial community, enabling detailed interpretation of expression patterns associated with denitrification, nitrification, and anammox processes.
 
+# Data analysis
+
 ## Exploring all transcripts
 
 ```bash
@@ -425,13 +494,12 @@ ko_long_norm <- ko_long %>%
 
 ## Exploration of whole-community functional profiles
 
-```{r NMDS, echo=FALSE}
+```{r NMDS}
 
 ## ============================================================
 ## Exploration of whole-community functional profiles
 ## ============================================================
 
-library(tidyverse)
 library(vegan)
 library(pheatmap)
 library(RColorBrewer)
@@ -486,12 +554,14 @@ mat_rel <- mat_rel[
 
 set.seed(1)
 
-nmds <- metaMDS(
-  mat_rel,
-  distance = "bray",
-  k = 2,
-  trymax = 100,
-  autotransform = FALSE
+nmds_output <- capture.output(
+  nmds <- metaMDS(
+    mat_rel,
+    distance = "bray",
+    k = 2,
+    trymax = 100,
+    autotransform = FALSE
+  )
 )
 
 ## 6. Extract NMDS sample scores
@@ -541,7 +611,7 @@ ggplot(
 
 ```
 
-Whole-community transcriptional functional profiles differed among stations and showed consistent vertical structuring, with mid-depth communities displaying distinct functional profiles relative to surface and bottom samples.
+Whole-community transcriptional functional profiles showed clear structuring across the sampled stations and depths. Mid-depth samples from all three stations clustered relatively closely in ordination space, indicating broadly similar KO expression profiles despite their different geographic locations. Interestingly, the surface sample from St3 (St3_S14S) grouped with the mid-depth samples rather than with the other surface sample, suggesting that its transcriptional profile more closely resembled that of the mid-water communities. In contrast, the remaining surface and bottom samples were more dispersed, with St1 in particular showing distinct functional profiles relative to St2 and St3.
 
 Let's look at which KOs are driving these separations:
 
@@ -560,8 +630,11 @@ ko_vectors %>%
   slice_head(n = 20)
 ```
 
-These top KOs show the functions most strongly associated with the NMDS structure. 
+These top KOs show the functions most strongly associated with the NMDS structure.
+
 **Note**: because I used permutations = 0, these are not significance-tested. They are simply the KOs whose abundance patterns best match the NMDS geometry.
+
+Now, let's look at which functions are associated with these KOs.
 
 ```{r}
 ko_top <- ko_vectors %>%
@@ -574,8 +647,13 @@ ko_top <- ko_vectors %>%
   )
 
 ko_top %>%
-  select(KO_ID, KO_function, NMDS1, NMDS2, R2)
+  select(KO_ID, KO_function) %>% mutate(
+    KO_function = stringr::str_trunc(KO_function, width = 60)
+  ) %>%
+  knitr::kable()
 ```
+
+Let's look at their relative abundance.
 
 ```{r top_20_KO_abundance}
 top20_long <- ko_long_rel %>%
@@ -611,9 +689,9 @@ pheatmap(
   main = "Top KOs associated with NMDS structure"
 )
 ```
-::: {.callout-note title="📝 NMDS interpretation"}
+::: {.callout-note title="📝 Interpretation"}
 
-The NMDS revealed clear structuring of overall KO functional profiles among samples (stress = 0.027), with separation associated with both station and depth. The KOs most strongly associated with the ordination included a mixture of core metabolic functions, bacterial transport/envelope functions, and several eukaryotic cellular processes (e.g. translation, cytoskeletal regulation and RNA processing). The heatmap of the top 20 NMDS-associated KOs showed coordinated differences across samples rather than dominance by a single function, with particularly distinct profiles in some bottom and surface samples. These results suggest that the ordination reflects broad shifts in community functional transcriptional composition, potentially influenced by changes in the relative contribution of different taxonomic groups, rather than variation in a single metabolic pathway.
+The KOs most strongly associated with the ordination included a mixture of core metabolic functions, bacterial transport/envelope functions, and several eukaryotic cellular processes (e.g. translation, cytoskeletal regulation and RNA processing). The heatmap of the top 20 NMDS-associated KOs showed coordinated differences across samples rather than dominance by a single function, with particularly distinct profiles in some bottom and surface samples. These results suggest that the ordination reflects broad shifts in community functional transcriptional composition, potentially influenced by changes in the relative contribution of different taxonomic groups, rather than variation in a single metabolic pathway.
 
 :::
 
@@ -1021,7 +1099,7 @@ ko_cluster_summary <- ko_cluster_df %>%
 
 ko_cluster_summary
 ```
-:: {.callout-note title="📝 Cluster interpretation"}
+::: {.callout-note title="📝 Cluster interpretation"}
 
 Clustering of the 50 most variable KOs revealed distinct functional signatures across samples. One cluster was dominated by nutrient-transport and substrate-acquisition genes, suggesting variation in heterotrophic resource utilisation. A small but highly coherent cluster comprising amoC and nirK reflected the previously identified nitrification signal. A larger cluster containing rbcL, rbcS and energy-metabolism genes was consistent with autotrophic and photosynthetic activity, while a fourth cluster contained genes associated with motility, protein-folding stress responses and cytoskeletal functions. Together, these patterns indicate coordinated shifts in major metabolic and cellular strategies across stations and depths.
 
@@ -1337,9 +1415,39 @@ ggplot(
   )
 
 ```
-**Taxonomic contribution to functional KO clusters**. Relative genus-level contribution to the transcript coverage of each of the four KO clusters identified from the 50 most variable KO expression profiles. Genera contributing ≥1% within a cluster are shown individually, while lower-abundance taxa are grouped as Other.
 
+**Taxonomic contribution to functional KO clusters**. Relative genus-level contribution to the transcript coverage of each of the four KO clusters identified from the 50 most variable KO expression profiles. Genera contributing ≥1% within a cluster are shown individually, while lower-abundance taxa are grouped as Other.
 
 ::: {.callout-note title="Figure interpretation"}
 The four KO clusters showed distinct taxonomic signatures. Cluster 1 was strongly dominated by *Pelagibacter*, consistent with a resource-acquisition and heterotrophic metabolism profile. Cluster 2 was dominated by nitrifying taxa, particularly *Nitrosopumilus*, with additional contributions from *Nitrosovibrio* and *Nitrosomonas*, supporting the archaeal nitrification signal identified previously. Cluster 3 was taxonomically more diverse and included several phytoplankton genera such as *Chaetoceros*, *Cylindrotheca*, *Micromonas*, *Thalassiosira* and *Phaeocystis*, consistent with autotrophic and photosynthetic functions. Cluster 4 comprised a broader mixture of marine bacterial taxa.
 :::
+
+Let's double check nirK taxonomy
+
+```{r nirK_taxonomy}
+nirK_genes <- genes_long_tax %>%
+  filter(KO_ID == "K00368")
+
+unique(nirK_genes$species)
+```
+
+We can calculate how much of the total nirK transcript coverage is contributed by each taxonomic assignment.
+
+```{r nirk_coverage}
+nirK_species <- nirK_genes %>%
+  mutate(
+    species = ifelse(is.na(species), "Unassigned", species)
+  ) %>%
+  group_by(species) %>%
+  summarise(
+    total_coverage = sum(coverage, na.rm = TRUE),
+    n_genes = n_distinct(gene_id),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    percent_coverage = 100 * total_coverage / sum(total_coverage)
+  ) %>%
+  arrange(desc(total_coverage))
+
+nirK_species
+```
