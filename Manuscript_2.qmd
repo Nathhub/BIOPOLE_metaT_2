@@ -1604,3 +1604,126 @@ nirK_species <- nirK_genes %>%
 
 nirK_species
 ```
+
+## Linking function to environmental variables
+
+```{r env_table}
+sample_metadata <- tibble::tribble(
+  ~sample_alias, ~station_name, ~depth_m,
+  "NB_S", "NB",  3,
+  "NB_M", "NB", 30,
+  "NB_B", "NB", 41,
+  "SC_S", "SC",  2,
+  "SC_M", "SC", 30,
+  "SC_B", "SC", 45,
+  "NC_M", "NC", 30,
+  "NC_B", "NC", 37
+)
+
+ctd_env <- sample_metadata %>%
+  group_split(sample_alias) %>%
+  map_dfr(function(x) {
+
+    st <- x$station_name
+    z  <- x$depth_m
+
+    closest <- ctd %>%
+      filter(station_name == st) %>%
+      slice_min(
+        abs(pressure - z),
+        n = 1,
+        with_ties = FALSE
+      )
+
+    bind_cols(
+      x,
+      closest %>%
+        select(
+          pressure,
+          temperature,
+          salinity,
+          sigma_t,
+          oxygen,
+          chlorophyll
+        )
+    )
+  })
+
+
+nutrients_wide <- nutrients %>%
+  select(
+    station_name,
+    pressure,
+    nutrient,
+    concentration
+  ) %>%
+  pivot_wider(
+    names_from = nutrient,
+    values_from = concentration
+  )
+
+nutrient_env <- sample_metadata %>%
+  group_split(sample_alias) %>%
+  map_dfr(function(x) {
+
+    st <- x$station_name
+    z  <- x$depth_m
+
+    closest <- nutrients_wide %>%
+      filter(station_name == st) %>%
+      slice_min(
+        abs(pressure - z),
+        n = 1,
+        with_ties = FALSE
+      )
+
+    bind_cols(
+      x,
+      closest %>%
+        select(
+          nutrient_pressure = pressure,
+          silicate,
+          phosphate,
+          nitrite,
+          nitrate,
+          ammonium
+        )
+    )
+  })
+
+environment <- ctd_env %>%
+  left_join(
+    nutrient_env %>%
+      select(
+        sample_alias,
+        nitrate,
+        nitrite,
+        ammonium,
+        phosphate,
+        silicate
+      ),
+    by = "sample_alias"
+  ) %>% select(-pressure)
+```
+
+```{r colinearity}
+env_cor <- environment %>%
+  select(
+    temperature,
+    salinity,
+    sigma_t,
+    oxygen,
+    chlorophyll,
+    nitrate,
+    nitrite,
+    ammonium,
+    phosphate,
+    silicate
+  ) %>%
+  cor(
+    method = "spearman",
+    use = "pairwise.complete.obs"
+  )
+
+round(env_cor, 2)
+```
