@@ -98,6 +98,160 @@ metadata %>%
   knitr::kable()
 ```
 
+## CTD & Nutrient data
+
+```{r importing_data}
+library(lubridate)
+library(janitor)
+
+ctd <- read_xlsx(
+  "data/BIOPOLE_stn_nutrient_data.xlsx",
+  sheet = 1,
+  .name_repair = "minimal"
+) %>%
+  janitor::clean_names() %>%
+  mutate(
+    across(where(is.character), ~ na_if(.x, "NaN")),
+    time_utc = ymd_hms(time_utc, tz = "UTC")
+  ) %>%
+  select(where(~ !all(is.na(.x)))) %>%
+  
+  rename(
+    latitude = latitude_degrees_north,
+    longitude = longitude_degrees_east,
+    salinity = salinity_ch1_psu,
+    sigma_t = sigma_t_ch1_kg_m_3,
+    chlorophyll = chlor_fluorescence_ugrams_l,
+    par = par_umol_m_2_s_1,
+    temperature = temperature_ch1_degree_c,
+    oxygen_sat = oxy_percentsat_ch1_percent,
+    oxygen = oxy_conc_ch1_umol_kg
+  ) %>%
+  
+  select(
+    -salinity_ch2_psu,
+    -sigma_t_ch2_kg_m_3,
+    -temperature_ch2_degree_c,
+    -oxy_percentsat_ch2_percent,
+    -oxy_conc_ch2_umol_kg
+  )
+
+``` 
+
+### CTD profiles
+
+```{r env_plots, fig.width=10, fig.height=8}
+ctd_profiles <- ctd %>%
+  select(
+    station_name,
+    pressure,
+    temperature,
+    salinity,
+    oxygen,
+    chlorophyll
+  ) %>%
+  pivot_longer(
+    cols = -c(station_name, pressure),
+    names_to = "variable",
+    values_to = "value"
+  ) %>%
+  mutate(
+    variable = recode(
+      variable,
+      temperature = "Temperature (°C)",
+      salinity = "Salinity (PSU)",
+      oxygen = "Oxygen (µmol kg⁻¹)",
+      chlorophyll = "Chlorophyll fluorescence (µg L⁻¹)"
+    )
+  )
+
+ggplot(
+  ctd_profiles,
+  aes(x = value, y = pressure, colour = station_name)
+) +
+  geom_path(linewidth = 0.8) +
+  scale_y_reverse() +
+  facet_wrap(
+    ~ variable,
+    scales = "free_x",
+    nrow = 1
+  ) +
+  labs(
+    x = NULL,
+    y = "Pressure (dbar)",
+    colour = "Station"
+  ) +
+  theme_bw() +
+  theme(
+    strip.background = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+### Nutrients
+
+```{r nutrient_plots, fig.width=10, fig.height=8}
+nutrients <- read_xlsx(
+  "data/BIOPOLE_stn_nutrient_data.xlsx",
+  sheet = 2,
+  .name_repair = "minimal"
+) %>%
+  clean_names() %>%
+  mutate(
+    across(where(is.character), ~ na_if(.x, "NaN"))
+  ) %>%
+  select(where(~ !all(is.na(.x)))) %>%
+  rename(
+    latitude = latitude_degrees_north,
+    longitude = longitude_degrees_east,
+    silicate = si_u_m_l,
+    phosphate = po4_u_m_l,
+    nitrite = no2_u_m_l,
+    nitrate = no3_u_m_l,
+    ammonium = nh4_u_m_l
+  ) %>%
+  
+  pivot_longer(
+    cols = silicate:ammonium,
+    names_to = "nutrient",
+    values_to = "concentration"
+  ) %>%
+  filter(!is.na(concentration))
+
+nutrients_plot <- nutrients %>%
+  arrange(nutrient, station_name, pressure)
+
+ggplot(
+  nutrients_plot,
+  aes(
+    x = concentration,
+    y = pressure,
+    colour = station_name,
+    group = interaction(station_name, nutrient)
+  )
+) +
+  geom_path(linewidth = 0.6) +
+  geom_point(size = 2) +
+  scale_y_reverse() +
+  facet_wrap(
+    ~ nutrient,
+    scales = "free_x",
+    nrow = 1
+  ) +
+  labs(
+    x = "Concentration (µM)",
+    y = "Pressure (dbar)",
+    colour = "Station"
+  ) +
+  theme_bw() +
+  theme(
+    strip.background = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
 ## 🧪 Sample Processing, Sequencing & Data Availability
 
 The Centre for Genomic Research (CGR) processed **9 marine eRNA samples** (+ 1 negative control) for metatranscriptomic sequencing as part of project **SSP203072**. The workflow included:
@@ -334,7 +488,7 @@ anvi-export-gene-coverage-and-detection -c St1_contigs.db
 ```
 We replicate this for the other stations. Then we can import the tables to R.
 
-```{r importing data}
+```{r importing_data_2}
 library(tidyverse)
 
 st1 <- read_tsv("data/St1_gene_coverage_annotations.tsv") %>%
@@ -1157,72 +1311,71 @@ However, we don't really need to import the Kaiju output into anvio because we c
 Let's, parse St1_genes_kaiju_names.out in R and join it to genes_long using gene_callers_id (plus assembly to make IDs globally unique).
 
 ```{r kaiju_import, eval=FALSE}
-read_kaiju_tax <- function(file, assembly) {
+# read_kaiju_tax <- function(file, assembly) {
+# 
+#   read_lines(file) %>%
+#     keep(~ str_starts(.x, "C\t")) %>%
+#     str_split_fixed("\t", 8) %>%
+#     as_tibble(.name_repair = "minimal") %>%
+#     set_names(c(
+#       "status",
+#       "gene_callers_id",
+#       "taxon_id",
+#       "score",
+#       "match_taxon_ids",
+#       "accessions",
+#       "match_sequences",
+#       "taxonomy"
+#     )) %>%
+#     separate(
+#       taxonomy,
+#       into = c(
+#         "superkingdom",
+#         "phylum",
+#         "class",
+#         "order",
+#         "family",
+#         "genus",
+#         "species"
+#       ),
+#       sep = ";",
+#       fill = "right",
+#       extra = "drop"
+#     ) %>%
+#     mutate(
+#       across(
+#         c(superkingdom, phylum, class, order, family, genus, species),
+#         ~ na_if(str_trim(.x), "NA")
+#       ),
+#       gene_callers_id = as.integer(gene_callers_id),
+#       taxon_id = as.integer(taxon_id),
+#       assembly = assembly,
+#       gene_id = paste(assembly, gene_callers_id, sep = "_")
+#     )
+# }
+# 
+# tax_st1 <- read_kaiju_tax(
+#   "data/St1_genes_kaiju_names.out",
+#   "St1"
+# )
+# 
+# tax_st2 <- read_kaiju_tax(
+#   "data/St2_genes_kaiju_names.out",
+#   "St2"
+# )
+# 
+# tax_st3 <- read_kaiju_tax(
+#   "data/St3_genes_kaiju_names.out",
+#   "St3"
+# )
+# 
+# taxonomy_all <- bind_rows(
+#   tax_st1,
+#   tax_st2,
+#   tax_st3
+# )
 
-  read_lines(file) %>%
-    keep(~ str_starts(.x, "C\t")) %>%
-    str_split_fixed("\t", 8) %>%
-    as_tibble(.name_repair = "minimal") %>%
-    set_names(c(
-      "status",
-      "gene_callers_id",
-      "taxon_id",
-      "score",
-      "match_taxon_ids",
-      "accessions",
-      "match_sequences",
-      "taxonomy"
-    )) %>%
-    separate(
-      taxonomy,
-      into = c(
-        "superkingdom",
-        "phylum",
-        "class",
-        "order",
-        "family",
-        "genus",
-        "species"
-      ),
-      sep = ";",
-      fill = "right",
-      extra = "drop"
-    ) %>%
-    mutate(
-      across(
-        c(superkingdom, phylum, class, order, family, genus, species),
-        ~ na_if(str_trim(.x), "NA")
-      ),
-      gene_callers_id = as.integer(gene_callers_id),
-      taxon_id = as.integer(taxon_id),
-      assembly = assembly,
-      gene_id = paste(assembly, gene_callers_id, sep = "_")
-    )
-}
-
-
-tax_st1 <- read_kaiju_tax(
-  "data/St1_genes_kaiju_names.out",
-  "St1"
-)
-
-tax_st2 <- read_kaiju_tax(
-  "data/St2_genes_kaiju_names.out",
-  "St2"
-)
-
-tax_st3 <- read_kaiju_tax(
-  "data/St3_genes_kaiju_names.out",
-  "St3"
-)
-
-taxonomy_all <- bind_rows(
-  tax_st1,
-  tax_st2,
-  tax_st3
-)
-
-saveRDS(taxonomy_all, "data/taxonomy_all.rds")
+# saveRDS(taxonomy_all, "data/taxonomy_all.rds")
 
 ```
 
