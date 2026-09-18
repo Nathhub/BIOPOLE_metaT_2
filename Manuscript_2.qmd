@@ -39,6 +39,17 @@ Samples were collected aboard the R/V *Sikuliaq* during the 2023 DBO/ECO-Foci cr
 library(tidyverse)
 library(readxl)
 library(ggOceanMaps)
+library(here)
+
+options(
+  ggOceanMaps.datapath = here(".ggOceanMaps_data")
+)
+
+dir.create(
+  getOption("ggOceanMaps.datapath"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
 
 metadata <- read_excel("data/BIOPOLE_metadata.xlsx")
 
@@ -1726,4 +1737,134 @@ env_cor <- environment %>%
   )
 
 round(env_cor, 2)
+```
+Several environmental variables were strongly collinear, particularly salinity, density, nitrate, phosphate and silicate, while oxygen varied inversely with this gradient. These variables should therefore be interpreted as linked environmental gradients rather than independent drivers.
+
+Let's do an environmental PCA:
+
+```{r env_pca}
+env_pca <- environment %>%
+  select(
+    temperature,
+    salinity,
+    sigma_t,
+    oxygen,
+    chlorophyll,
+    nitrate,
+    nitrite,
+    ammonium,
+    phosphate,
+    silicate
+  ) %>%
+  scale() %>%
+  prcomp(center = TRUE, scale. = TRUE)
+
+summary(env_pca)
+
+env_pca$rotation
+```
+
+Environmental PCA captured **89.8%** of the variance on the first two axes. PC1 (60.5%) represented a major hydrographic/nutrient gradient, with higher salinity, density and nutrient concentrations opposed to higher oxygen. PC2 (29.3%) primarily contrasted warmer, chlorophyll-rich conditions with higher nitrite concentrations.
+
+```{r PCA_plot}
+env_scores <- as.data.frame(env_pca$x) %>%
+  mutate(
+    sample_alias = environment$sample_alias,
+    station_name = environment$station_name,
+    depth_m = environment$depth_m
+  )
+
+ggplot(
+  env_scores,
+  aes(
+    x = PC1,
+    y = PC2,
+    colour = station_name,
+    label = sample_alias
+  )
+) +
+  geom_point(size = 3) +
+  geom_text(
+    nudge_y = 0.15,
+    show.legend = FALSE
+  ) +
+  labs(
+    x = "PC1 (60.5%)",
+    y = "PC2 (29.3%)",
+    colour = "Station"
+  ) +
+  theme_bw()
+```
+
+Environmental PCA revealed strong station-specific structure. NB samples clustered closely, whereas SC showed a pronounced vertical environmental gradient from surface to bottom. NC samples were primarily distinguished by low PC2 scores. This indicates that environmental variation among metatranscriptome samples reflects both station and depth-dependent hydrographic differences.
+
+```{r}
+## Row-scale the same matrix used for clustering
+
+top_ko_scaled <- t(scale(t(top_ko_mat)))
+
+
+## Convert to long format and attach cluster assignments
+
+cluster_scores <- as.data.frame(top_ko_scaled) %>%
+  rownames_to_column("KO_ID") %>%
+  pivot_longer(
+    -KO_ID,
+    names_to = "sample_alias",
+    values_to = "scaled_expression"
+  ) %>%
+  left_join(
+    ko_cluster_df %>%
+      select(KO_ID, cluster),
+    by = "KO_ID"
+  ) %>%
+  group_by(sample_alias, cluster) %>%
+  summarise(
+    cluster_score = mean(scaled_expression, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+cluster_scores_wide <- cluster_scores %>%
+  mutate(
+    cluster = paste0("cluster", cluster)
+  ) %>%
+  pivot_wider(
+    names_from = cluster,
+    values_from = cluster_score
+  )
+
+cluster_scores_wide
+
+```
+
+```{r join_env_pca}
+
+sample_name_map <- c(
+  "St1_S4S"  = "NB_S",
+  "St1_S4M"  = "NB_M",
+  "St1_S4B"  = "NB_B",
+  "St3_S14S" = "SC_S",
+  "St3_S14M" = "SC_M",
+  "St3_S14B" = "SC_B",
+  "St2_S13M" = "NC_M",
+  "St2_S13B" = "NC_B"
+)
+
+cluster_scores_wide <- cluster_scores_wide %>%
+  mutate(
+    sample_alias = recode(sample_alias, !!!sample_name_map)
+  )
+
+cluster_env <- cluster_scores_wide %>%
+  left_join(
+    env_scores %>%
+      select(
+        sample_alias,
+        PC1,
+        PC2,
+        station_name,
+        depth_m
+      ),
+    by = "sample_alias"
+  )
 ```
